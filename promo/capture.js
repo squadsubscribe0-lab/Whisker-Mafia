@@ -48,7 +48,7 @@ const FPS = 30, DT = 1000 / FPS;
   }, SEED);
   await p.goto('http://localhost:8765/index.html');
   // cursor overlay
-  let frame = 0, cur = { x: 600, y: 1350, down: false };
+  let T0 = 0, frame = 0, cur = { x: 600, y: 1350, down: false };
   const step = () => p.evaluate(dt => window.__step(dt), DT);
   for (let i = 0; i < 90; i++) await step();   // let the menu / fonts settle
   await p.evaluate(() => { const d = document.createElement('div'); d.id = 'vcur'; d.innerHTML = COACH_HAND;
@@ -56,6 +56,7 @@ const FPS = 30, DT = 1000 / FPS;
     document.body.appendChild(d); });
   const shot = async () => {
     await p.evaluate(c => { const d = document.getElementById('vcur'); d.style.transform = `translate(${c.x - 33}px,${c.y - 9}px) scale(${c.down ? .86 : 1})`; }, cur);
+    if (frame === 0) T0 = await p.evaluate(() => performance.now());
     if (!DRY) await p.screenshot({ path: `${OUT}/f${String(frame).padStart(4, '0')}.jpg`, type: 'jpeg', quality: 95 });
     frame++;
   };
@@ -73,6 +74,15 @@ const FPS = 30, DT = 1000 / FPS;
   await p.evaluate(() => {
     resizeCanvas = function () { RK = SC * (window.devicePixelRatio || 1) || 1; cv.width = Math.round(W * RK); cv.height = Math.round(WH * RK); };
     makeBg = function (ri) { const c = document.createElement('canvas'); c.width = W * 3; c.height = WH * 3; const g = c.getContext('2d'); g.scale(3, 3); drawBattleBg(g, ri); bgCanvas = c; bgRegion = ri; };
+  });
+  // log every sound the game plays (virtual ms) so the audio track can be rebuilt offline
+  await p.evaluate(() => {
+    window.__sfx = []; const orig = Sfx.play;
+    Sfx.play = function (k, vol, rate) {
+      if (!this.muted()) { const cfg = this.CFG[k], now = performance.now();
+        if (now - (this.last[k] || 0) >= (cfg ? cfg[0] : 45)) __sfx.push({ k, t: now, rate: rate || 1, g: (cfg ? cfg[1] : .6) * (vol == null ? 1 : vol), file: !!this.buf[k] }); }
+      return orig.call(this, k, vol, rate);
+    };
   });
   // ---- start a run with a built-up board ----
   await p.evaluate(async () => { await startRun('normal'); });
@@ -108,5 +118,8 @@ const FPS = 30, DT = 1000 / FPS;
   const run = async n => { for (let k = 0; k < n; k++, i++) { await tick(); if (i % 30 === 0) await LOG(); } };
   for (const at of rockets) { await run(at * FPS - 14 - i); await moveTo(rk.x, rk.y, 14); await down(); await wait(3); await up(); await LOG('rocket'); await moveTo(780, rk.y + 120, 12); i += 29; }
   await run(T - i);
+  const log = await p.evaluate(() => __sfx);
+  fs.writeFileSync((DRY ? '.' : OUT) + '/sfx.json', JSON.stringify(log.map(e => ({ ...e, t: (e.t - T0) / 1000 }))));
+  console.log('sounds', log.length, 'frames', frame);
   await b.close();
 })();
